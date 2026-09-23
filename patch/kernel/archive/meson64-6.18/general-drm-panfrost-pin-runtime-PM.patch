@@ -1,0 +1,80 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Josema <jomadeto@gmail.com>
+Date: Fri, 25 Sep 2026 17:40:36 +0000
+Subject: general: aml-c400-plus: pin runtime-PM on panfrost probe and reset
+ drivers/gpu/drm/panfrost/panfrost_device.c
+ drivers/gpu/drm/panfrost/panfrost_drv.c
+
+Signed-off-by: Josema <jomadeto@gmail.com>
+---
+ drivers/gpu/drm/panfrost/panfrost_device.c |  3 +++
+ drivers/gpu/drm/panfrost/panfrost_drv.c    | 13 +++++++++-
+ 2 files changed, 15 insertions(+), 1 deletion(-)
+
+diff --git a/drivers/gpu/drm/panfrost/panfrost_device.c b/drivers/gpu/drm/panfrost/panfrost_device.c
+index 04bec27449cb..e40899c210df 100644
+--- a/drivers/gpu/drm/panfrost/panfrost_device.c
++++ b/drivers/gpu/drm/panfrost/panfrost_device.c
+@@ -404,10 +404,13 @@ void panfrost_device_reset(struct panfrost_device *pfdev)
+ 	panfrost_gpu_soft_reset(pfdev);
+ 
+ 	panfrost_gpu_power_on(pfdev);
+ 	panfrost_mmu_reset(pfdev);
+ 	panfrost_job_enable_interrupts(pfdev);
++	if (of_property_read_bool(pfdev->dev->of_node, "amlogic,pin-runtime-pm-probe")) {
++		pm_runtime_get_sync(pfdev->dev);
++	}
+ }
+ 
+ static int panfrost_device_runtime_resume(struct device *dev)
+ {
+ 	struct panfrost_device *pfdev = dev_get_drvdata(dev);
+diff --git a/drivers/gpu/drm/panfrost/panfrost_drv.c b/drivers/gpu/drm/panfrost/panfrost_drv.c
+index a31c5395de18..415684e66e26 100644
+--- a/drivers/gpu/drm/panfrost/panfrost_drv.c
++++ b/drivers/gpu/drm/panfrost/panfrost_drv.c
+@@ -762,29 +762,40 @@ static int panfrost_probe(struct platform_device *pdev)
+ 	}
+ 
+ 	pm_runtime_set_active(pfdev->dev);
+ 	pm_runtime_mark_last_busy(pfdev->dev);
+ 	pm_runtime_enable(pfdev->dev);
++	if (of_property_read_bool(pdev->dev.of_node, "amlogic,pin-runtime-pm-probe")) {
++		err = pm_runtime_resume_and_get(pfdev->dev);
++		if (err < 0) {
++			dev_err(&pdev->dev, "Fatal: GPU power interconnect anchor failed: %d\n", err);
++			goto err_out1;
++		}
++	}
+ 	pm_runtime_set_autosuspend_delay(pfdev->dev, 50); /* ~3 frames */
+ 	pm_runtime_use_autosuspend(pfdev->dev);
+ 
+ 	/*
+ 	 * Register the DRM device with the core and the connectors with
+ 	 * sysfs
+ 	 */
+ 	err = drm_dev_register(ddev, 0);
+ 	if (err < 0)
+-		goto err_out1;
++		goto err_out_pm_put;
+ 
+ 	err = panfrost_gem_shrinker_init(ddev);
+ 	if (err)
+ 		goto err_out2;
+ 
+ 	return 0;
+ 
+ err_out2:
+ 	drm_dev_unregister(ddev);
++err_out_pm_put:
++	if (of_property_read_bool(pdev->dev.of_node, "amlogic,pin-runtime-pm-probe")) {
++		pm_runtime_put_noidle(pfdev->dev);
++	}
+ err_out1:
+ 	pm_runtime_disable(pfdev->dev);
+ 	panfrost_device_fini(pfdev);
+ 	pm_runtime_set_suspended(pfdev->dev);
+ err_out0:
+-- 
+Created with Armbian build tools https://github.com/armbian/build
+
